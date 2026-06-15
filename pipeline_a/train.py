@@ -1,5 +1,11 @@
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
+
+# Ensure the project root is on sys.path when running train.py directly.
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,8 +26,8 @@ def generate_synthetic_data():
     """Create simple sample price and weather data for testing."""
     price_days = 120
     weather_days = 90
-    price_dates = pd.date_range(end=datetime.utcnow().date(), periods=price_days)
-    weather_dates = pd.date_range(end=datetime.utcnow().date(), periods=weather_days)
+    price_dates = pd.date_range(end=datetime.now().date(), periods=price_days)
+    weather_dates = pd.date_range(end=datetime.now().date(), periods=weather_days)
 
     # Simple synthetic price series that trends upward with a little noise
     price_base = np.linspace(50, 80, price_days)
