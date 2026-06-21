@@ -119,77 +119,86 @@ def get_agmarknet_data(commodity, state, days=90):
 
 
 def get_weather_data(lat, lon, days=60):
-	"""Fetch weather data from NASA POWER API for a location.
+	"""Fetch weather data from Open-Meteo API for a location.
 
-	Uses the NASA POWER daily point API to retrieve precipitation (rainfall),
-	daily max temperature, daily min temperature, and relative humidity (if available).
-
-	The function returns a pandas DataFrame with columns:
-		date, rainfall, max_temp, min_temp, humidity, drought_index
-
-	The `drought_index` is a simple, relative indicator computed as the negative
-	z-score of rainfall across the returned period (so higher values indicate drier conditions).
+	Uses the Open-Meteo forecast endpoint to retrieve daily temperature and
+	precipitation values plus hourly relative humidity. The function returns a
+	pandas DataFrame with columns: date, max_temp, min_temp, rainfall,
+	humidity, drought_index.
 	"""
 	end_date = datetime.utcnow().date()
 	start_date = end_date - timedelta(days=days)
 
-	url = "https://power.larc.nasa.gov/api/temporal/daily/point"
+	url = "https://api.open-meteo.com/v1/forecast"
 	params = {
-		"parameters": "PRECTOT,T2M_MAX,T2M_MIN,RH2M",
-		"community": "AG",
 		"latitude": lat,
 		"longitude": lon,
-		"start": start_date.strftime("%Y%m%d"),
-		"end": end_date.strftime("%Y%m%d"),
-		"format": "JSON",
+		"hourly": "relative_humidity_2m",
+		"daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration",
+		"past_days": days,
+		"forecast_days": 7,
+		"timezone": "Asia/Kolkata",
 	}
 
 	resp = _safe_request(url, params=params)
-	cols = ["date", "rainfall", "max_temp", "min_temp", "humidity", "drought_index"]
+	cols = ["date", "max_temp", "min_temp", "rainfall", "humidity", "drought_index"]
 	if resp is None:
 		return pd.DataFrame(columns=cols)
 
 	try:
 		j = resp.json()
 	except ValueError:
-		print("NASA POWER response not JSON; can't parse.")
+		print("Open-Meteo response not JSON; can't parse.")
 		return pd.DataFrame(columns=cols)
 
-	try:
-		params_data = j["properties"]["parameter"]
-	except Exception:
-		print("Unexpected NASA POWER response structure")
+	daily = j.get("daily", {})
+	hourly = j.get("hourly", {})
+	if not daily or "time" not in daily:
+		print("Unexpected Open-Meteo response structure")
 		return pd.DataFrame(columns=cols)
 
-	rainfall = params_data.get("PRECTOT", {})
-	tmax = params_data.get("T2M_MAX", {})
-	tmin = params_data.get("T2M_MIN", {})
-	rh = params_data.get("RH2M", {})
+	daily_dates = daily.get("time", [])
+	max_temp = daily.get("temperature_2m_max", [])
+	min_temp = daily.get("temperature_2m_min", [])
+	rainfall = daily.get("precipitation_sum", [])
+	# hourly humidity values are used to compute a daily mean
+	humidity_time = hourly.get("time", [])
+	humidity_values = hourly.get("relative_humidity_2m", [])
+
+	humidity = None
+	if humidity_time and humidity_values:
+		try:
+			h_df = pd.DataFrame({
+				"time": pd.to_datetime(humidity_time, errors="coerce"),
+				"humidity": pd.to_numeric(humidity_values, errors="coerce"),
+			})
+			h_df["date"] = h_df["time"].dt.date
+			humidity = h_df.groupby("date")["humidity"].mean().to_dict()
+		except Exception:
+			humidity = {}
+	else:
+		humidity = {}
 
 	rows = []
-	for d_str, r_val in rainfall.items():
+	for idx, date_str in enumerate(daily_dates):
 		try:
-			d = datetime.strptime(d_str, "%Y%m%d").date()
+			row_date = datetime.strptime(date_str, "%Y-%m-%d").date()
 		except Exception:
-			d = None
+			row_date = None
 
 		rows.append({
-			"date": d,
-			"rainfall": r_val,
-			"max_temp": tmax.get(d_str),
-			"min_temp": tmin.get(d_str),
-			"humidity": rh.get(d_str),
+			"date": row_date,
+			"max_temp": max_temp[idx] if idx < len(max_temp) else None,
+			"min_temp": min_temp[idx] if idx < len(min_temp) else None,
+			"rainfall": rainfall[idx] if idx < len(rainfall) else None,
+			"humidity": humidity.get(row_date) if row_date is not None else None,
 			"drought_index": None,
 		})
 
 	df = pd.DataFrame(rows)
-
-	# Convert numeric columns and compute drought index
-	if "rainfall" in df.columns and not df["rainfall"].isnull().all():
-		r = pd.to_numeric(df["rainfall"], errors="coerce")
-		std = r.std(ddof=0)
-		std = std if std != 0 else 1.0
-		df["drought_index"] = -((r - r.mean()) / std)
+	if "rainfall" in df.columns:
+		df["rainfall"] = pd.to_numeric(df["rainfall"], errors="coerce")
+		df["drought_index"] = df["rainfall"].apply(lambda x: 1 if pd.notna(x) and x < 2.0 else 0)
 
 	_ensure_data_dir()
 	filename = os.path.join("data", f"weather_{lat}_{lon}.csv")

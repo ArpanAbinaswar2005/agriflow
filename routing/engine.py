@@ -1,9 +1,3 @@
-"""AgriFlow Routing Engine
-
-Combines Pipeline A (price forecasting) and Pipeline B (quality grading) outputs
-to recommend optimal mandis for farmers based on weighted scoring.
-"""
-
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 
