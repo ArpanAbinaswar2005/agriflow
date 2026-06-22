@@ -7,15 +7,15 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 import numpy as np
+from torchvision import models
 
 # Add project root to path for imports
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from pipeline_a.model import AgriFlowPipelineA
-from pipeline_b.model_stage1 import Stage1Grader
-from pipeline_b.model_stage2 import LateFusionGrader
 from routing.engine import MandiRecommender
 
 # Use CPU for model loading and demo execution
@@ -29,8 +29,10 @@ stage2_path = ROOT_DIR / "models" / "stage2_best.pt"
 
 # Instantiate models
 pipeline_a = AgriFlowPipelineA(price_input_size=3, weather_input_size=5)
-stage1_model = Stage1Grader(num_classes=12)
-stage2_model = LateFusionGrader(num_classes=12)
+stage1_model = models.mobilenet_v3_large(weights=None)
+stage1_model.classifier[-1] = nn.Linear(stage1_model.classifier[-1].in_features, 12)
+stage2_model = models.resnet50(weights=None)
+stage2_model.fc = nn.Linear(stage2_model.fc.in_features, 12)
 
 # Load state dicts safely
 try:
@@ -49,12 +51,7 @@ except Exception as e:
     sys.exit(1)
 
 try:
-    state_dict = torch.load(stage1_path, map_location="cpu")
-    if isinstance(state_dict, dict) and "state_dict" in state_dict:
-        state_dict = state_dict["state_dict"]
-    if all(key.startswith("module.") for key in state_dict.keys()):
-        state_dict = {key.replace("module.", "", 1): value for key, value in state_dict.items()}
-    stage1_model.load_state_dict(state_dict)
+    stage1_model.load_state_dict(torch.load(stage1_path, map_location="cpu"))
     print(f"Loaded Stage 1 model from {stage1_path}")
 except FileNotFoundError:
     print(f"Stage 1 model file not found: {stage1_path}")
@@ -64,12 +61,7 @@ except Exception as e:
     sys.exit(1)
 
 try:
-    state_dict = torch.load(stage2_path, map_location="cpu")
-    if isinstance(state_dict, dict) and "state_dict" in state_dict:
-        state_dict = state_dict["state_dict"]
-    if all(key.startswith("module.") for key in state_dict.keys()):
-        state_dict = {key.replace("module.", "", 1): value for key, value in state_dict.items()}
-    stage2_model.load_state_dict(state_dict)
+    stage2_model.load_state_dict(torch.load(stage2_path, map_location="cpu"))
     print(f"Loaded Stage 2 model from {stage2_path}")
 except FileNotFoundError:
     print(f"Stage 2 model file not found: {stage2_path}")
@@ -104,10 +96,9 @@ print(f"Stage 1 provisional grade: class {best_idx}")
 # Stage 2 demo
 fake_image = torch.rand(1, 3, 224, 224)
 with torch.no_grad():
-    logits = stage2_model(fake_image, None, None)
-probs = torch.softmax(logits, dim=1)
-best_idx = int(torch.argmax(probs[0]).item())
-print(f"Stage 2 verified grade: class {best_idx}")
+    logits = stage2_model(fake_image)
+verified_class = logits.argmax(1).item()
+print(f"Stage 2 verified grade: class {verified_class}")
 
 # Routing demo
 mandis = [
