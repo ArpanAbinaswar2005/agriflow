@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -31,6 +32,72 @@ def _safe_request(url, params=None, timeout=10):
 		print(f"Request failed for {url} : {e}")
 		return None
 
+def get_mandi_coordinates(market_name, district, state):
+	"""Geocode a mandi using OpenStreetMap Nominatim and return (lat, lon)."""
+	if not market_name:
+		return 20.5937, 78.9629
+
+	clean_name = market_name
+	if "(" in market_name:
+		clean_name = market_name.split("(", 1)[0].strip()
+
+	url = "https://nominatim.openstreetmap.org/search"
+	headers = {"User-Agent": "AgriFlow/1.0"}
+	params = {
+		"q": f"{clean_name}, {district}, {state}, India",
+		"format": "json",
+		"limit": 1,
+	}
+
+	lat = None
+	lon = None
+	try:
+		resp = requests.get(url, params=params, headers=headers, timeout=10)
+		resp.raise_for_status()
+		results = resp.json()
+		if results:
+			first = results[0]
+			lat = float(first.get("lat"))
+			lon = float(first.get("lon"))
+	except requests.RequestException as e:
+		print(f"Nominatim request failed: {e}")
+		lat = None
+		lon = None
+	except (ValueError, TypeError):
+		lat = None
+		lon = None
+
+	if lat is not None and lon is not None:
+		print(f"Coordinates for {market_name}: {lat}, {lon}")
+		return lat, lon
+
+	# Respect rate limits before fallback query
+	time.sleep(1)
+	params["q"] = f"{district}, {state}, India"
+
+	try:
+		resp = requests.get(url, params=params, headers=headers, timeout=10)
+		resp.raise_for_status()
+		results = resp.json()
+		if results:
+			first = results[0]
+			lat = float(first.get("lat"))
+			lon = float(first.get("lon"))
+	except requests.RequestException as e:
+		print(f"Nominatim fallback request failed: {e}")
+		lat = None
+		lon = None
+	except (ValueError, TypeError):
+		lat = None
+		lon = None
+
+	if lat is not None and lon is not None:
+		print(f"Coordinates for {market_name}: {lat}, {lon}")
+		return lat, lon
+
+	lat, lon = 20.5937, 78.9629
+	print(f"Coordinates for {market_name}: {lat}, {lon}")
+	return lat, lon
 
 def get_agmarknet_data(commodity, state, days=90):
 	"""Fetch commodity price data from Agmarknet for the given commodity and state.
@@ -118,14 +185,21 @@ def get_agmarknet_data(commodity, state, days=90):
 	return df
 
 
-def get_weather_data(lat, lon, days=60):
+def get_weather_data(lat=None, lon=None, days=60, market_name=None, district=None, state=None):
 	"""Fetch weather data from Open-Meteo API for a location.
 
 	Uses the Open-Meteo forecast endpoint to retrieve daily temperature and
 	precipitation values plus hourly relative humidity. The function returns a
 	pandas DataFrame with columns: date, max_temp, min_temp, rainfall,
-	humidity, drought_index.
+	humidity, drought_index, is_forecast.
 	"""
+	if market_name:
+		if not district or not state:
+			raise ValueError("district and state are required when market_name is provided")
+		lat, lon = get_mandi_coordinates(market_name, district, state)
+	elif lat is None or lon is None:
+		raise ValueError("Either lat/lon or market_name must be provided")
+
 	end_date = datetime.utcnow().date()
 	start_date = end_date - timedelta(days=days)
 
@@ -141,7 +215,7 @@ def get_weather_data(lat, lon, days=60):
 	}
 
 	resp = _safe_request(url, params=params)
-	cols = ["date", "max_temp", "min_temp", "rainfall", "humidity", "drought_index"]
+	cols = ["date", "max_temp", "min_temp", "rainfall", "humidity", "drought_index", "is_forecast"]
 	if resp is None:
 		return pd.DataFrame(columns=cols)
 
@@ -200,6 +274,16 @@ def get_weather_data(lat, lon, days=60):
 		df["rainfall"] = pd.to_numeric(df["rainfall"], errors="coerce")
 		df["drought_index"] = df["rainfall"].apply(lambda x: 1 if pd.notna(x) and x < 2.0 else 0)
 
+	# Mark historical vs forecast rows: first 'days' rows are historical, rest are forecast
+	df["is_forecast"] = 0
+	if len(df) > days:
+		df.loc[days:, "is_forecast"] = 1
+
+	# Count rows
+	n_historical = (df["is_forecast"] == 0).sum()
+	n_forecast = (df["is_forecast"] == 1).sum()
+	print(f"Weather data: {n_historical} historical + {n_forecast} forecast rows")
+
 	_ensure_data_dir()
 	filename = os.path.join("data", f"weather_{lat}_{lon}.csv")
 	df.to_csv(filename, index=False)
@@ -216,7 +300,9 @@ def preprocess_and_normalize(df):
 	"""
 	df = df.copy()
 	numeric_cols = df.select_dtypes(include=[np.number]).columns
-	for c in numeric_cols:
+	# Skip normalization for is_forecast column (should remain 0 or 1)
+	cols_to_normalize = [c for c in numeric_cols if c != "is_forecast"]
+	for c in cols_to_normalize:
 		col = pd.to_numeric(df[c], errors="coerce")
 		mean = col.mean()
 		std = col.std(ddof=0)
@@ -238,4 +324,9 @@ if __name__ == "__main__":
 	if not df_weather.empty:
 		df_weather_norm = preprocess_and_normalize(df_weather.select_dtypes(include=[np.number]))
 		print("Normalized weather numeric columns:\n", df_weather_norm.head())
+
+	df_weather_lasalgaon = get_weather_data(market_name="Lasalgaon(Niphad)", district="Nashik", state="Maharashtra")
+	print("Weather for Lasalgaon:", df_weather_lasalgaon.shape)
+	df_weather_bangalore = get_weather_data(market_name="Bangalore Central", district="Bangalore", state="Karnataka")
+	print("Weather for Bangalore Central:", df_weather_bangalore.shape)
 

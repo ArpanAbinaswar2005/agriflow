@@ -65,6 +65,7 @@ def generate_synthetic_data():
             "min_temp": min_temp,
             "humidity": humidity,
             "drought_index": drought_index,
+            "is_forecast": 0.0,
         }
     )
 
@@ -93,7 +94,7 @@ def prepare_sequences(df_price: pd.DataFrame, df_weather: pd.DataFrame):
 
     The function returns:
         price_tensor: (samples, 90, 5)
-        weather_tensor: (samples, 60, 5)
+        weather_tensor: (samples, 67, 6)
         target_tensor: (samples, 3)
     """
     # Copy and sort by date if available
@@ -115,7 +116,7 @@ def prepare_sequences(df_price: pd.DataFrame, df_weather: pd.DataFrame):
     df_weather = preprocess_and_normalize(df_weather)
 
     price_columns = ["modal_price", "min_price", "max_price", "arrival_volume", "day_of_year"]
-    weather_columns = ["rainfall", "max_temp", "min_temp", "humidity", "drought_index"]
+    weather_columns = ["rainfall", "max_temp", "min_temp", "humidity", "drought_index", "is_forecast"]
 
     for col in price_columns:
         if col not in df_price.columns:
@@ -129,12 +130,12 @@ def prepare_sequences(df_price: pd.DataFrame, df_weather: pd.DataFrame):
     modal_values = df_price["modal_price"].fillna(0.0).values
 
     seq_price = 90
-    seq_weather = 60
+    seq_weather = 67
     sample_count = min(len(price_values) - seq_price + 1, len(weather_values) - seq_weather + 1)
     sample_count = max(sample_count, 0)
 
     if sample_count == 0:
-        raise ValueError("Not enough data to create sample sequences. Need at least 90 price rows and 60 weather rows.")
+        raise ValueError("Not enough data to create sample sequences. Need at least 90 price rows and 67 weather rows.")
 
     price_samples = []
     weather_samples = []
@@ -291,12 +292,12 @@ def main():
 
     train_loader, val_loader, test_loader = split_data(price_tensor, weather_tensor, target_tensor)
 
-    model = AgriFlowPipelineA(price_input_size=5, weather_input_size=5)
+    model = AgriFlowPipelineA(price_input_size=5, weather_input_size=6)
     train_losses, val_losses = train_model(model, train_loader, val_loader, epochs=50)
     plot_losses(train_losses, val_losses)
 
     # Load best saved model and evaluate on test data
-    best_model = AgriFlowPipelineA(price_input_size=5, weather_input_size=5)
+    best_model = AgriFlowPipelineA(price_input_size=5, weather_input_size=6)
     best_path = os.path.join("models", "pipeline_a_best.pt")
     best_model.load_state_dict(torch.load(best_path, map_location=torch.device("cpu")))
     test_mse = evaluate_model(best_model, test_loader)

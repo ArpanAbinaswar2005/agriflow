@@ -124,7 +124,7 @@ class AgriFlowPipelineA(nn.Module):
         weather_input_size (int): features per weather time step
     """
 
-    def __init__(self, price_input_size: int = 1, weather_input_size: int = 4):
+    def __init__(self, price_input_size: int = 1, weather_input_size: int = 6):
         super().__init__()
         # LSTMs
         self.price_lstm = PriceLSTM(input_size=price_input_size, hidden_size=128, num_layers=2)
@@ -175,10 +175,10 @@ def count_parameters(model: nn.Module):
 if __name__ == "__main__":
     # Quick test to verify shapes
     batch = 2
-    p_seq_len = 60
-    w_seq_len = 60
+    p_seq_len = 90
+    w_seq_len = 67
     price_features = 1
-    weather_features = 4
+    weather_features = 6
 
     model = AgriFlowPipelineA(price_input_size=price_features, weather_input_size=weather_features)
     count_parameters(model)
@@ -189,6 +189,7 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         out = model(price_x, weather_x)
+    print("Weather encoder: 67 timesteps (60 historical + 7 forecast)")
     print("Output shape (batch, 3):", out.shape)
     # Ensure outputs correspond to 7,14,30 day forecasts per batch
     assert out.shape == (batch, 3), "Output shape mismatch"
